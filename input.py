@@ -106,6 +106,21 @@ def _parse_key(data: bytes) -> str:
             if keycode == ord('d'): return "ctrl-d"
             if keycode == ord('w'): return "alt-backspace"
 
+    # VT modified arrow keys: \x1b[1;{mod}C/D  (alt=3, ctrl=5, super/cmd=9)
+    m = re.match(rb"\x1b\[1;(\d+)([A-D])$", data)
+    if m:
+        mod = int(m.group(1)) - 1
+        direction = chr(m.group(2)[0])
+        alt    = bool(mod & 2)
+        ctrl   = bool(mod & 4)
+        super_ = bool(mod & 8)
+        if direction == "C":
+            if alt or ctrl: return "alt-right"
+            if super_:      return "cmd-right"
+        elif direction == "D":
+            if alt or ctrl: return "alt-left"
+            if super_:      return "cmd-left"
+
     if data == b"\r" or data == b"\n":
         return "enter"
     if data == b"\x7f" or data == b"\x08":
@@ -124,6 +139,20 @@ def _parse_key(data: bytes) -> str:
         return "left"
     if data == b"\x1b\r" or data == b"\x1b\n":
         return "alt-enter"
+    if data == b"\x1bb":                         # ESC+b  (alt+left in many terminals)
+        return "alt-left"
+    if data == b"\x1bf":                         # ESC+f  (alt+right)
+        return "alt-right"
+    if data in (b"\x1b[H", b"\x1bOH", b"\x1b[1~"):  # Home / cmd+left
+        return "cmd-left"
+    if data in (b"\x1b[F", b"\x1bOF", b"\x1b[4~"):  # End  / cmd+right
+        return "cmd-right"
+    if data == b"\x15":                          # ctrl+u — kill to line start
+        return "cmd-backspace"
+    if data == b"\x01":                          # ctrl+a — beginning of line
+        return "cmd-left"
+    if data == b"\x05":                          # ctrl+e — end of line
+        return "cmd-right"
 
     try:
         text = data.decode("utf-8")
@@ -171,6 +200,38 @@ class LineEditor:
     def move_right(self):
         if self.cursor < len(self.buf):
             self.cursor += 1
+
+    def move_word_left(self):
+        """Move back past whitespace then past a word (readline backward-word)."""
+        while self.cursor > 0 and self.buf[self.cursor - 1] in (" ", "\n", "\t"):
+            self.cursor -= 1
+        while self.cursor > 0 and self.buf[self.cursor - 1] not in (" ", "\n", "\t"):
+            self.cursor -= 1
+
+    def move_word_right(self):
+        """Move forward past whitespace then past a word (readline forward-word)."""
+        n = len(self.buf)
+        while self.cursor < n and self.buf[self.cursor] in (" ", "\n", "\t"):
+            self.cursor += 1
+        while self.cursor < n and self.buf[self.cursor] not in (" ", "\n", "\t"):
+            self.cursor += 1
+
+    def move_line_start(self):
+        """Move to start of current logical line."""
+        while self.cursor > 0 and self.buf[self.cursor - 1] != "\n":
+            self.cursor -= 1
+
+    def move_line_end(self):
+        """Move to end of current logical line."""
+        n = len(self.buf)
+        while self.cursor < n and self.buf[self.cursor] != "\n":
+            self.cursor += 1
+
+    def delete_to_line_start(self):
+        """Delete from cursor back to start of current logical line (cmd+backspace)."""
+        while self.cursor > 0 and self.buf[self.cursor - 1] != "\n":
+            self.cursor -= 1
+            del self.buf[self.cursor]
 
 
 def _visual_rows(line: str, prefix_len: int, width: int) -> int:
@@ -225,11 +286,32 @@ def _render(editor: LineEditor, prompt: str, prev_rows: int = 1) -> int:
     return total_rows
 
 
-async def read_input() -> str:
+async def read_cancel_key() -> None:
+    """Wait until 'c', 'C', or ESC is pressed. Other keys are ignored.
+    Designed to run concurrently with stream_response via asyncio.wait."""
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = list(old)
+    new[3] &= ~(termios.ICANON | termios.ECHO)  # cbreak: no canonical, no echo
+    new[6][termios.VMIN] = 1
+    new[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, new)
+    try:
+        while True:
+            data = await _read_bytes()
+            if data in (b"c", b"C", b"\x1b"):
+                return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+async def read_input(initial: str = "") -> str:
     prompt = f"{BLUE}>{RESET} "
     _enter_raw()
     try:
         editor = LineEditor()
+        if initial:
+            editor.insert(initial)
         prev_rows = _render(editor, prompt)
 
         while True:
@@ -259,6 +341,21 @@ async def read_input() -> str:
 
                 case "right":
                     editor.move_right()
+
+                case "alt-left":
+                    editor.move_word_left()
+
+                case "alt-right":
+                    editor.move_word_right()
+
+                case "cmd-left":
+                    editor.move_line_start()
+
+                case "cmd-right":
+                    editor.move_line_end()
+
+                case "cmd-backspace":
+                    editor.delete_to_line_start()
 
                 case "ctrl-c":
                     sys.stdout.write("^C\r\n")

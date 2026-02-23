@@ -42,6 +42,9 @@ def load_session_messages(session_id: str) -> list[tuple[str, list]]:
     with open(f) as fh:
         for line in fh:
             obj = json.loads(line)
+            # Skip auto-injected compact summary context messages
+            if obj.get("isCompactSummary"):
+                continue
             t = obj.get("type")
             msg = obj.get("message", {})
             role = msg.get("role") if isinstance(msg, dict) else None

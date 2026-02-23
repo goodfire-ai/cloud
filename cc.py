@@ -33,14 +33,42 @@ most recent conversation.
 
 import argparse
 import asyncio
+import dataclasses
+import os
+import re
 import sys
 from pathlib import Path
+
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 import input as cc_input
-from render import print_recent_messages, print_user_bubble, stream_response
+from render import bubble_row_count, print_recent_messages, print_user_bubble, stream_response
 from session import load_config, load_last_session, pick_session_fzf, save_session_id
+
+_ANSI_RE = re.compile(r"\033\[[^a-zA-Z]*[a-zA-Z]")
+
+
+def _count_rows(text: str) -> int:
+    """Count terminal rows consumed by text, respecting newlines and line wrapping."""
+    try:
+        width = os.get_terminal_size().columns
+    except OSError:
+        width = 80
+    clean = _ANSI_RE.sub("", text)
+    rows = 0
+    col = 0
+    for ch in clean:
+        if ch == "\n":
+            rows += 1
+            col = 0
+        else:
+            col += 1
+            if col >= width:
+                rows += 1
+                col = 0
+    return rows
+
 
 PLAN_PROMPT = """
 Before taking any action, you MUST output a numbered plan of what you intend to do.
@@ -63,23 +91,64 @@ async def run(prompt: str, options: ClaudeAgentOptions):
 
 
 async def interactive(options: ClaudeAgentOptions):
-    async with ClaudeSDKClient(options=options) as client:
-        while True:
-            try:
-                prompt = await cc_input.read_input()
-            except (EOFError, KeyboardInterrupt):
+    current_options = options
+    staged = ""
+    should_exit = False
+
+    while not should_exit:
+        async with ClaudeSDKClient(options=current_options) as client:
+            while True:
+                try:
+                    prompt = await cc_input.read_input(initial=staged)
+                    staged = ""
+                except (EOFError, KeyboardInterrupt):
+                    should_exit = True
+                    break
+
+                if not prompt.strip():
+                    continue
+
+                print_user_bubble(prompt)
+                await client.query(prompt)
                 print()
-                break
 
-            if not prompt.strip():
-                continue
+                output: list[str] = []
+                stream_task = asyncio.create_task(stream_response(client, output=output))
+                cancel_task = asyncio.create_task(cc_input.read_cancel_key())
 
-            print_user_bubble(prompt)
-            await client.query(prompt)
-            print()
-            session_id = await stream_response(client)
-            if session_id:
-                save_session_id(session_id)
+                done, pending = await asyncio.wait(
+                    [stream_task, cancel_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                if cancel_task in done:
+                    # Erase bubble + streaming output precisely so resend shows a fresh bubble
+                    rows_up = bubble_row_count(prompt) + 1 + _count_rows("".join(output))
+                    if rows_up > 0:
+                        sys.stdout.write(f"\033[{rows_up}A")
+                    sys.stdout.write("\r\033[J")
+                    sys.stdout.flush()
+                    staged = prompt
+                    last = load_last_session()
+                    if last:
+                        current_options = dataclasses.replace(current_options, resume=last)
+                    break
+                else:
+                    # Normal completion
+                    try:
+                        session_id = stream_task.result()
+                    except Exception:
+                        session_id = None
+                    if session_id:
+                        save_session_id(session_id)
+                        # Keep resume pointer up to date for any future reconnect
+                        current_options = dataclasses.replace(current_options, resume=session_id)
 
 
 def build_options(args, config: dict) -> tuple[ClaudeAgentOptions, str | None]:

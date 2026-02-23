@@ -24,6 +24,24 @@ DIFF_MAX_LINES = 40
 BUBBLE_BG = "\033[48;5;235m"  # dark gray background
 
 
+def _bubble_wrapped_lines(text: str) -> list[str]:
+    """Return the wrapped lines that print_user_bubble would produce."""
+    try:
+        width = os.get_terminal_size().columns
+    except OSError:
+        width = 80
+    max_content = min(width - 4, 72)
+    wrapped: list[str] = []
+    for line in text.split("\n"):
+        wrapped.extend(textwrap.wrap(line, max_content) if line.strip() else [""])
+    return wrapped
+
+
+def bubble_row_count(text: str) -> int:
+    """Number of terminal rows print_user_bubble(text) will occupy."""
+    return 2 + len(_bubble_wrapped_lines(text))  # blank + content lines + blank
+
+
 def print_user_bubble(text: str):
     """Print user message as a right-justified bubble with dark background."""
     try:
@@ -31,13 +49,7 @@ def print_user_bubble(text: str):
     except OSError:
         width = 80
 
-    max_content = min(width - 4, 72)
-
-    # Wrap each paragraph
-    wrapped: list[str] = []
-    for line in text.split("\n"):
-        wrapped.extend(textwrap.wrap(line, max_content) if line.strip() else [""])
-
+    wrapped = _bubble_wrapped_lines(text)
     content_width = max((len(l) for l in wrapped), default=0)
     bubble_width = content_width + 2  # 1 space padding each side
     left_pad = " " * max(0, width - bubble_width)
@@ -128,21 +140,32 @@ def render_content_blocks(content: list[dict]):
     print()
 
 
-def print_recent_messages(session_id: str, n: int = 2):
-    """Print the last n user/assistant exchange pairs from a session."""
+def print_recent_messages(session_id: str, max_lines: int = 200):
+    """Print up to max_lines of recent session history."""
+    import io, contextlib
+
     exchanges = load_session_messages(session_id)
     if not exchanges:
         return
 
-    for role, content in exchanges[-n * 2:]:
-        if role == "user":
-            parts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
-            text = " ".join(parts).strip()
-            if text:
-                print_user_bubble(text)
-        else:
-            render_content_blocks(content)
+    # Render the last chunk of exchanges into a buffer
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        for role, content in exchanges[-100:]:
+            if role == "user":
+                parts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                text = " ".join(parts).strip()
+                if text:
+                    print_user_bubble(text)
+            else:
+                render_content_blocks(content)
 
+    lines = buf.getvalue().split("\n")
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    sys.stdout.write("\n".join(lines))
+    if lines and not lines[-1] == "":
+        sys.stdout.write("\n")
     print(f"{DIM}{'─' * 40}{RESET}")
 
 
@@ -153,15 +176,16 @@ def waiting_dots_thread(stop: threading.Event):
     sys.stdout.write("\033[?25l")  # hide cursor
     sys.stdout.flush()
     while not stop.wait(0.4):
-        sys.stdout.write(f"\r{DIM}{frames[i % 3]:<3}{RESET}")
+        sys.stdout.write(f"\r{DIM}{frames[i % 3]:<3}  c:cancel{RESET}")
         sys.stdout.flush()
         i += 1
-    sys.stdout.write("\r   \r\033[?25h")  # clear dots, restore cursor
+    sys.stdout.write("\r\033[K\033[?25h")  # clear line, restore cursor
     sys.stdout.flush()
 
 
-async def stream_response(client: ClaudeSDKClient) -> str | None:
-    """Stream one response turn. Returns session_id if present."""
+async def stream_response(client: ClaudeSDKClient, output: list | None = None) -> str | None:
+    """Stream one response turn. Returns session_id if present.
+    If output list is provided, printed text chunks are appended to it."""
     session_id = None
     stop = threading.Event()
     dots = threading.Thread(target=waiting_dots_thread, args=(stop,), daemon=True)
@@ -172,27 +196,34 @@ async def stream_response(client: ClaudeSDKClient) -> str | None:
             stop.set()
             dots.join()
 
-    async for msg in client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            if msg.error:
-                print(f"\n{RED}Error: {msg.error}{RESET}", file=sys.stderr)
-                continue
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    stop_dots()
-                    print(block.text, end="", flush=True)
-                elif isinstance(block, ToolUseBlock):
-                    stop_dots()
-                    print(f"\n{format_tool_use(block)}", flush=True)
+    try:
+        async for msg in client.receive_response():
+            if isinstance(msg, AssistantMessage):
+                if msg.error:
+                    print(f"\n{RED}Error: {msg.error}{RESET}", file=sys.stderr)
+                    continue
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        stop_dots()
+                        if output is not None:
+                            output.append(block.text)
+                        print(block.text, end="", flush=True)
+                    elif isinstance(block, ToolUseBlock):
+                        stop_dots()
+                        formatted = format_tool_use(block)
+                        if output is not None:
+                            output.append(f"\n{formatted}\n")
+                        print(f"\n{formatted}", flush=True)
 
-        elif isinstance(msg, ResultMessage):
-            if msg.is_error:
-                print(f"\n{RED}Error: {msg.result}{RESET}", file=sys.stderr)
-                return session_id
-            session_id = msg.session_id
-            if msg.total_cost_usd is not None:
-                print(f"\n{DIM}(${msg.total_cost_usd:.4f} | {session_id[:8]}){RESET}")
+            elif isinstance(msg, ResultMessage):
+                if msg.is_error:
+                    print(f"\n{RED}Error: {msg.result}{RESET}", file=sys.stderr)
+                    return session_id
+                session_id = msg.session_id
+                if msg.total_cost_usd is not None:
+                    print(f"\n{DIM}(${msg.total_cost_usd:.4f} | {session_id[:8]}){RESET}")
+    finally:
+        stop_dots()
 
-    stop_dots()
     print()
     return session_id

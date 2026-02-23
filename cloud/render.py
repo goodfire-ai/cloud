@@ -13,7 +13,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-from session import load_session_messages
+from .session import load_session_messages
 
 DIM = "\033[2m"
 RED = "\033[31m"

@@ -36,9 +36,9 @@ from claude_agent_sdk import (
     PermissionResultDeny,
 )
 
-import input as cc_input
-from render import DIM, RESET, bubble_row_count, dots_paused, format_tool_use, print_recent_messages, print_user_bubble, stream_response
-from session import load_last_session, save_session_id
+from . import input as cc_input
+from .render import DIM, RESET, bubble_row_count, dots_paused, format_tool_use, print_recent_messages, print_user_bubble, stream_response
+from .session import load_last_session, save_session_id
 
 async def _permission_callback(tool_name: str, tool_input: dict, context) -> object:
     """Ask the user whether to allow a tool call."""

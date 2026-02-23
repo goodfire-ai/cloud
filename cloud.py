@@ -3,29 +3,17 @@
 cloud - A minimal Claude Code CLI wrapper for SSH-friendly use.
 
 Usage:
-    cloud                                      # interactive mode
-    cloud "your prompt here"                   # one-shot
-    echo "prompt" | cloud                      # one-shot via pipe
-    cloud -c "follow-up"                       # continue last session
-    cloud -c                                   # continue last session interactively
-    cloud -r <session_id> "prompt"             # resume specific session
-    cloud -s                                   # pick session with fzf
-    cloud -p "prompt"                          # plan mode (thinks before acting)
-    cloud -y "prompt"                          # skip all permission prompts
-    cloud -y -p "build me a thing"             # combine flags
+    cloud                                          # interactive mode
+    cloud "your prompt here"                       # one-shot
+    echo "prompt" | cloud                          # one-shot via pipe
+    cloud -c "follow-up"                           # continue last session
+    cloud -c                                       # continue last session interactively
+    cloud -r <session_id>                          # resume specific session
+    cloud -m opus "prompt"                         # use a specific model
+    cloud --dangerously-skip-permissions "prompt"  # skip all permission prompts
 
-Config (~/.cc/config.json):
-    {
-        "mcp_servers": {
-            "my-server": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@my/mcp-server"]
-            }
-        },
-        "system_prompt": "You are working in a Python monorepo...",
-        "allowed_tools": ["Bash", "Read", "Write", "Edit"]
-    }
+Settings (MCP servers, allowed tools, model defaults, etc.) are inherited
+from Claude Code's own config at ~/.claude/settings.json.
 
 Session IDs are saved to ~/.cc/last_session so -c always continues the
 most recent conversation.
@@ -37,14 +25,51 @@ import dataclasses
 import os
 import re
 import sys
+import termios
 from pathlib import Path
+from types import SimpleNamespace
 
-
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    PermissionResultAllow,
+    PermissionResultDeny,
+)
 
 import input as cc_input
-from render import bubble_row_count, print_recent_messages, print_user_bubble, stream_response
-from session import load_config, load_last_session, pick_session_fzf, save_session_id
+from render import DIM, RESET, bubble_row_count, dots_paused, format_tool_use, print_recent_messages, print_user_bubble, stream_response
+from session import load_last_session, save_session_id
+
+async def _permission_callback(tool_name: str, tool_input: dict, context) -> object:
+    """Ask the user whether to allow a tool call."""
+    formatted = format_tool_use(SimpleNamespace(name=tool_name, input=tool_input))
+
+    # Pause dots animation, clear line, show tool + prompt
+    dots_paused.set()
+    sys.stdout.write(f"\r\033[K{formatted}\n  Allow? [y/n] ")
+    sys.stdout.flush()
+
+    # Read a single keypress in cbreak mode
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    new = list(old)
+    new[3] &= ~(termios.ICANON | termios.ECHO)
+    new[6][termios.VMIN] = 1
+    new[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, new)
+    try:
+        ch = os.read(fd, 1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    dots_paused.clear()
+    allowed = ch.lower() in (b"y", b"\r", b"\n")
+    sys.stdout.write(("y" if allowed else "n") + "\n")
+    sys.stdout.flush()
+
+    if allowed:
+        return PermissionResultAllow()
+    return PermissionResultDeny(message="Denied by user")
 
 _ANSI_RE = re.compile(r"\033\[[^a-zA-Z]*[a-zA-Z]")
 
@@ -70,30 +95,25 @@ def _count_rows(text: str) -> int:
     return rows
 
 
-PLAN_PROMPT = """
-Before taking any action, you MUST output a numbered plan of what you intend to do.
-Format it as:
-  Plan:
-  1. ...
-  2. ...
-  ...
-Then execute the plan step by step.
-""".strip()
-
-
 async def run(prompt: str, options: ClaudeAgentOptions):
     async with ClaudeSDKClient(options=options) as client:
         await client.query(prompt)
         print()
-        session_id = await stream_response(client)
+        session_id, cost = await stream_response(client)
         if session_id:
             save_session_id(session_id)
+        cost_str = f"${cost:.4f} | " if cost is not None else ""
+        id_str = session_id[:8] if session_id else ""
+        if cost_str or id_str:
+            print(f"{DIM}({cost_str}{id_str}){RESET}")
 
 
 async def interactive(options: ClaudeAgentOptions):
     current_options = options
     staged = ""
     should_exit = False
+    total_cost = 0.0
+    last_session_id: str | None = None
 
     while not should_exit:
         async with ClaudeSDKClient(options=current_options) as client:
@@ -140,28 +160,26 @@ async def interactive(options: ClaudeAgentOptions):
                         current_options = dataclasses.replace(current_options, resume=last)
                     break
                 else:
-                    # Normal completion
                     try:
-                        session_id = stream_task.result()
+                        session_id, cost = stream_task.result()
                     except Exception:
-                        session_id = None
+                        session_id, cost = None, None
+                    if cost is not None:
+                        total_cost += cost
                     if session_id:
+                        last_session_id = session_id
                         save_session_id(session_id)
-                        # Keep resume pointer up to date for any future reconnect
                         current_options = dataclasses.replace(current_options, resume=session_id)
 
+    cost_str = f"${total_cost:.4f} | " if total_cost else ""
+    id_str = last_session_id[:8] if last_session_id else ""
+    if cost_str or id_str:
+        print(f"{DIM}({cost_str}{id_str}){RESET}")
 
-def build_options(args, config: dict) -> tuple[ClaudeAgentOptions, str | None]:
-    append_parts = []
-    if config.get("system_prompt"):
-        append_parts.append(config["system_prompt"])
-    if args.plan:
-        append_parts.append(PLAN_PROMPT)
 
+def build_options(args) -> tuple[ClaudeAgentOptions, str | None]:
     resume = None
-    if args.sessions:
-        resume = pick_session_fzf()
-    elif args.continue_last:
+    if args.continue_last:
         resume = load_last_session()
         if not resume:
             print("No previous session found.", file=sys.stderr)
@@ -170,20 +188,15 @@ def build_options(args, config: dict) -> tuple[ClaudeAgentOptions, str | None]:
         resume = args.resume
 
     kwargs: dict = {"cwd": str(Path.cwd())}
-
-    if append_parts:
-        kwargs["system_prompt"] = {
-            "type": "preset",
-            "preset": "claude_code",
-            "append": "\n\n".join(append_parts),
-        }
-    kwargs["permission_mode"] = "bypassPermissions" if args.yes else "acceptEdits"
+    if args.dangerously_skip_permissions:
+        kwargs["permission_mode"] = "bypassPermissions"
+    else:
+        kwargs["permission_mode"] = "default"
+        kwargs["can_use_tool"] = _permission_callback
     if resume:
         kwargs["resume"] = resume
-    if config.get("mcp_servers"):
-        kwargs["mcp_servers"] = config["mcp_servers"]
-    if config.get("allowed_tools"):
-        kwargs["allowed_tools"] = config["allowed_tools"]
+    if args.model:
+        kwargs["model"] = args.model
 
     return ClaudeAgentOptions(**kwargs), resume
 
@@ -196,15 +209,13 @@ def main():
     )
     parser.add_argument("prompt", nargs="?", help="Prompt (reads stdin if omitted)")
     parser.add_argument("-c", "--continue-last", action="store_true", help="Continue last session")
-    parser.add_argument("-r", "--resume", metavar="ID", help="Resume specific session")
-    parser.add_argument("-s", "--sessions", action="store_true", help="Pick session with fzf")
-    parser.add_argument("-p", "--plan", action="store_true", help="Plan before acting")
-    parser.add_argument("-y", "--yes", action="store_true", help="Skip permission prompts")
+    parser.add_argument("-r", "--resume", metavar="ID", help="Resume a specific session")
+    parser.add_argument("-m", "--model", metavar="MODEL", help="Model to use (e.g. sonnet, opus, haiku)")
+    parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass all permission checks")
     args = parser.parse_args()
 
     cc_input.setup()
-    config = load_config()
-    options, resume = build_options(args, config)
+    options, resume = build_options(args)
 
     if resume:
         print_recent_messages(resume)

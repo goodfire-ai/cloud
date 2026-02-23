@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import textwrap
 import threading
@@ -20,8 +21,32 @@ GREEN = "\033[32m"
 BLUE = "\033[34;1m"
 RESET = "\033[0m"
 
+LIGHT_BLUE = "\033[94m"
+BOLD = "\033[1m"
+BOLD_OFF = "\033[22m"
+ITALIC = "\033[3m"
+ITALIC_OFF = "\033[23m"
+UNDERLINE = "\033[4m"
+UNDERLINE_OFF = "\033[24m"
+
 DIFF_MAX_LINES = 40
 BUBBLE_BG = "\033[48;5;235m"  # dark gray background
+
+_MD_CODE = re.compile(r"`([^`\n]+)`")
+_MD_BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
+_MD_UNDERLINE = re.compile(r"__([^_\n]+)__")
+_MD_ITALIC_STAR = re.compile(r"\*([^*\n]+)\*")
+_MD_ITALIC_UNDER = re.compile(r"(?<!\w)_([^_\n]+)_(?!\w)")
+
+
+def render_markdown(text: str) -> str:
+    """Minimal inline markdown → ANSI: `code`, **bold**, *italic*, __underline__."""
+    text = _MD_CODE.sub(lambda m: f"{LIGHT_BLUE}{m.group(1)}{RESET}", text)
+    text = _MD_BOLD.sub(lambda m: f"{BOLD}{m.group(1)}{BOLD_OFF}", text)
+    text = _MD_UNDERLINE.sub(lambda m: f"{UNDERLINE}{m.group(1)}{UNDERLINE_OFF}", text)
+    text = _MD_ITALIC_STAR.sub(lambda m: f"{ITALIC}{m.group(1)}{ITALIC_OFF}", text)
+    text = _MD_ITALIC_UNDER.sub(lambda m: f"{ITALIC}{m.group(1)}{ITALIC_OFF}", text)
+    return text
 
 
 def _bubble_wrapped_lines(text: str) -> list[str]:
@@ -133,7 +158,7 @@ def render_content_blocks(content: list[dict]):
         if not isinstance(block, dict):
             continue
         if block.get("type") == "text":
-            print(block["text"], end="", flush=True)
+            print(render_markdown(block["text"]), end="", flush=True)
         elif block.get("type") == "tool_use":
             b = SimpleNamespace(name=block.get("name", ""), input=block.get("input", {}))
             print(f"\n{format_tool_use(b)}", flush=True)
@@ -169,6 +194,9 @@ def print_recent_messages(session_id: str, max_lines: int = 200):
     print(f"{DIM}{'─' * 40}{RESET}")
 
 
+dots_paused = threading.Event()  # set by permission callback to suppress dots while prompting
+
+
 def waiting_dots_thread(stop: threading.Event):
     """Show a simple ... animation in a thread until stop is set."""
     frames = [".", "..", "..."]
@@ -176,20 +204,48 @@ def waiting_dots_thread(stop: threading.Event):
     sys.stdout.write("\033[?25l")  # hide cursor
     sys.stdout.flush()
     while not stop.wait(0.4):
-        sys.stdout.write(f"\r{DIM}{frames[i % 3]:<3}  c:cancel{RESET}")
-        sys.stdout.flush()
+        if not dots_paused.is_set():
+            sys.stdout.write(f"\r{DIM}{frames[i % 3]:<3}  c:cancel{RESET}")
+            sys.stdout.flush()
         i += 1
     sys.stdout.write("\r\033[K\033[?25h")  # clear line, restore cursor
     sys.stdout.flush()
 
 
-async def stream_response(client: ClaudeSDKClient, output: list | None = None) -> str | None:
-    """Stream one response turn. Returns session_id if present.
+async def stream_response(client: ClaudeSDKClient, output: list | None = None) -> tuple[str | None, float | None]:
+    """Stream one response turn. Returns (session_id, cost_usd).
     If output list is provided, printed text chunks are appended to it."""
     session_id = None
+    total_cost: float | None = None
     stop = threading.Event()
     dots = threading.Thread(target=waiting_dots_thread, args=(stop,), daemon=True)
     dots.start()
+
+    # Buffer incoming text chunks so markdown spans aren't split across flush boundaries.
+    # We render complete lines eagerly; any trailing partial line waits for the next chunk.
+    text_buf: list[str] = []
+
+    def _flush(force: bool = False) -> None:
+        if not text_buf:
+            return
+        blob = "".join(text_buf)
+        text_buf.clear()
+        if force:
+            if output is not None:
+                output.append(blob)
+            print(render_markdown(blob), end="", flush=True)
+            return
+        # Render up to (and including) the last newline; hold back any partial final line.
+        nl = blob.rfind("\n")
+        if nl == -1:
+            text_buf.append(blob)
+        else:
+            complete = blob[: nl + 1]
+            if output is not None:
+                output.append(complete)
+            print(render_markdown(complete), end="", flush=True)
+            if nl + 1 < len(blob):
+                text_buf.append(blob[nl + 1 :])
 
     def stop_dots():
         if not stop.is_set():
@@ -200,30 +256,32 @@ async def stream_response(client: ClaudeSDKClient, output: list | None = None) -
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
                 if msg.error:
+                    _flush(force=True)
                     print(f"\n{RED}Error: {msg.error}{RESET}", file=sys.stderr)
                     continue
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         stop_dots()
-                        if output is not None:
-                            output.append(block.text)
-                        print(block.text, end="", flush=True)
+                        text_buf.append(block.text)
+                        _flush()
                     elif isinstance(block, ToolUseBlock):
                         stop_dots()
+                        _flush(force=True)
                         formatted = format_tool_use(block)
                         if output is not None:
                             output.append(f"\n{formatted}\n")
                         print(f"\n{formatted}", flush=True)
 
             elif isinstance(msg, ResultMessage):
+                _flush(force=True)
                 if msg.is_error:
                     print(f"\n{RED}Error: {msg.result}{RESET}", file=sys.stderr)
-                    return session_id
+                    return session_id, total_cost
                 session_id = msg.session_id
-                if msg.total_cost_usd is not None:
-                    print(f"\n{DIM}(${msg.total_cost_usd:.4f} | {session_id[:8]}){RESET}")
+                total_cost = msg.total_cost_usd
     finally:
+        _flush(force=True)
         stop_dots()
 
     print()
-    return session_id
+    return session_id, total_cost

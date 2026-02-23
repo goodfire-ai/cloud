@@ -6,3 +6,6 @@ dependencies = ["claude-agent-sdk>=0.1.30"]
 
 [project.scripts]
 cloud = "cloud:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["cloud.py", "render.py", "session.py", "input.py"]

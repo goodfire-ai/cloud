@@ -154,8 +154,15 @@ def _parse_key(data: bytes) -> str:
     if data == b"\x05":                          # ctrl+e — end of line
         return "cmd-right"
 
+    # Strip bracketed paste markers (\x1b[200~ ... \x1b[201~) if present
+    if data.startswith(b"\x1b[200~"):
+        data = data[6:]
+    if data.endswith(b"\x1b[201~"):
+        data = data[:-6]
+
     try:
         text = data.decode("utf-8")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")  # normalise line endings
         if all(c.isprintable() or c == "\n" for c in text):
             return f"text:{text}"
     except UnicodeDecodeError:

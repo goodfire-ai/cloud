@@ -1,10 +1,12 @@
-# cc — minimal Claude Code wrapper
+# cloud — minimal Claude Code wrapper
+
+> like Claude, but lighter
 
 A lightweight Python wrapper around the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python) that gives you Claude Code's full agent capabilities with a clean, SSH-friendly terminal UI.
 
 ## Why
 
-Claude Code's built-in TUI is heavy — rich diffs, animated spinners, interactive permission prompts. The Agent SDK exposes the same underlying agent loop (file edits, bash, MCP, session continuity) as a plain Python library. `cc` puts a minimal interface on top.
+Claude Code's built-in TUI is heavy — rich diffs, animated spinners, interactive permission prompts. The Agent SDK exposes the same underlying agent loop (file edits, bash, MCP, session continuity) as a plain Python library. `cloud` puts a minimal interface on top.
 
 ## Install
 
@@ -16,20 +18,20 @@ export ANTHROPIC_API_KEY=sk-ant-...   # add to ~/.zshrc or ~/.bashrc
 ## Usage
 
 ```bash
-cc                                      # interactive mode
-cc "fix the bug in auth.py"            # one-shot
-cc -c                                  # continue last session interactively
-cc -c "actually, add tests too"        # continue last session with a prompt
-cc -r <session_id>                     # resume a specific session
-cc -s                                  # pick a session with fzf
-cc -p "refactor the payment module"    # plan mode (outputs plan before acting)
-cc -y "run tests and fix failures"     # skip all permission prompts
+cloud                                      # interactive mode
+cloud "fix the bug in auth.py"            # one-shot
+cloud -c                                  # continue last session interactively
+cloud -c "actually, add tests too"        # continue last session with a prompt
+cloud -r <session_id>                     # resume a specific session
+cloud -s                                  # pick a session with fzf
+cloud -p "refactor the payment module"    # plan mode (outputs plan before acting)
+cloud -y "run tests and fix failures"     # skip all permission prompts
 ```
 
 ```bash
 # Pipe-friendly
-cat error.log | cc "what's causing this?"
-git diff | cc "write a commit message"
+cat error.log | cloud "what's causing this?"
+git diff | cloud "write a commit message"
 ```
 
 ## Interactive mode

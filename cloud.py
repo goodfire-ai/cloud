@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-cc - A minimal Claude Code CLI wrapper for SSH-friendly use.
+cloud - A minimal Claude Code CLI wrapper for SSH-friendly use.
 
 Usage:
-    cc                                      # interactive mode
-    cc "your prompt here"                   # one-shot
-    echo "prompt" | cc                      # one-shot via pipe
-    cc -c "follow-up"                       # continue last session
-    cc -c                                   # continue last session interactively
-    cc -r <session_id> "prompt"             # resume specific session
-    cc -s                                   # pick session with fzf
-    cc -p "prompt"                          # plan mode (thinks before acting)
-    cc -y "prompt"                          # skip all permission prompts
-    cc -y -p "build me a thing"             # combine flags
+    cloud                                      # interactive mode
+    cloud "your prompt here"                   # one-shot
+    echo "prompt" | cloud                      # one-shot via pipe
+    cloud -c "follow-up"                       # continue last session
+    cloud -c                                   # continue last session interactively
+    cloud -r <session_id> "prompt"             # resume specific session
+    cloud -s                                   # pick session with fzf
+    cloud -p "prompt"                          # plan mode (thinks before acting)
+    cloud -y "prompt"                          # skip all permission prompts
+    cloud -y -p "build me a thing"             # combine flags
 
 Config (~/.cc/config.json):
     {

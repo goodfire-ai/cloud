@@ -68,20 +68,10 @@ def bubble_row_count(text: str) -> int:
 
 
 def print_user_bubble(text: str):
-    """Print user message as a right-justified bubble with dark background."""
-    try:
-        width = os.get_terminal_size().columns
-    except OSError:
-        width = 80
-
-    wrapped = _bubble_wrapped_lines(text)
-    content_width = max((len(l) for l in wrapped), default=0)
-    bubble_width = content_width + 2  # 1 space padding each side
-    left_pad = " " * max(0, width - bubble_width)
-
+    """Print user message as a left-aligned background block."""
     print()
-    for line in wrapped:
-        print(f"{left_pad}{BUBBLE_BG} {line:<{content_width}} {RESET}")
+    for line in _bubble_wrapped_lines(text):
+        print(f"  {BUBBLE_BG} {line} {RESET}")
     print()
 
 

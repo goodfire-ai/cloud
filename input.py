@@ -101,6 +101,10 @@ def _parse_key(data: bytes) -> str:
         if keycode == 127:
             if alt or ctrl: return "alt-backspace"
             return "backspace"
+        if ctrl:
+            if keycode == ord('c'): return "ctrl-c"
+            if keycode == ord('d'): return "ctrl-d"
+            if keycode == ord('w'): return "alt-backspace"
 
     if data == b"\r" or data == b"\n":
         return "enter"
@@ -234,12 +238,10 @@ async def read_input() -> str:
 
             match key:
                 case "enter":
-                    lines = editor.text.split("\n")
-                    cursor_line_idx = editor.text[:editor.cursor].count("\n")
-                    lines_below = len(lines) - 1 - cursor_line_idx
-                    if lines_below > 0:
-                        sys.stdout.write(f"\033[{lines_below}B")
-                    sys.stdout.write("\r\n")
+                    # Clear input so caller can render a bubble in its place
+                    if prev_rows > 1:
+                        sys.stdout.write(f"\033[{prev_rows - 1}A")
+                    sys.stdout.write(f"\r{CLEAR_TO_END}")
                     sys.stdout.flush()
                     return editor.text
 
@@ -259,13 +261,13 @@ async def read_input() -> str:
                     editor.move_right()
 
                 case "ctrl-c":
+                    sys.stdout.write("^C\r\n")
+                    sys.stdout.flush()
                     if editor.text:
                         editor = LineEditor()
                         prev_rows = _render(editor, prompt, prev_rows)
                         continue
                     else:
-                        sys.stdout.write("\r\n")
-                        sys.stdout.flush()
                         raise KeyboardInterrupt
 
                 case "ctrl-d":

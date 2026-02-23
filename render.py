@@ -1,4 +1,6 @@
+import os
 import sys
+import textwrap
 import threading
 from types import SimpleNamespace
 
@@ -19,6 +21,31 @@ BLUE = "\033[34;1m"
 RESET = "\033[0m"
 
 DIFF_MAX_LINES = 40
+BUBBLE_BG = "\033[48;5;235m"  # dark gray background
+
+
+def print_user_bubble(text: str):
+    """Print user message as a right-justified bubble with dark background."""
+    try:
+        width = os.get_terminal_size().columns
+    except OSError:
+        width = 80
+
+    max_content = min(width - 4, 72)
+
+    # Wrap each paragraph
+    wrapped: list[str] = []
+    for line in text.split("\n"):
+        wrapped.extend(textwrap.wrap(line, max_content) if line.strip() else [""])
+
+    content_width = max((len(l) for l in wrapped), default=0)
+    bubble_width = content_width + 2  # 1 space padding each side
+    left_pad = " " * max(0, width - bubble_width)
+
+    print()
+    for line in wrapped:
+        print(f"{left_pad}{BUBBLE_BG} {line:<{content_width}} {RESET}")
+    print()
 
 
 def format_diff(old: str, new: str) -> str:
@@ -112,7 +139,7 @@ def print_recent_messages(session_id: str, n: int = 2):
             parts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
             text = " ".join(parts).strip()
             if text:
-                print(f"{BLUE}>{RESET} {text}")
+                print_user_bubble(text)
         else:
             render_content_blocks(content)
 

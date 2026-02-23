@@ -39,7 +39,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
 import input as cc_input
-from render import print_recent_messages, stream_response
+from render import print_recent_messages, print_user_bubble, stream_response
 from session import load_config, load_last_session, pick_session_fzf, save_session_id
 
 PLAN_PROMPT = """
@@ -74,6 +74,7 @@ async def interactive(options: ClaudeAgentOptions):
             if not prompt.strip():
                 continue
 
+            print_user_bubble(prompt)
             await client.query(prompt)
             print()
             session_id = await stream_response(client)

@@ -186,6 +186,40 @@ def print_recent_messages(session_id: str, max_lines: int = 200):
 
 dots_paused = threading.Event()  # set by permission callback to suppress dots while prompting
 
+_status_text: str = ""
+
+
+def _term_rows() -> int:
+    try:
+        return os.get_terminal_size().lines
+    except OSError:
+        return 24
+
+
+def draw_status_bar() -> None:
+    if not _status_text:
+        return
+    rows = _term_rows()
+    sys.stdout.write(f"\0337\033[{rows};1H\033[K{DIM}  {_status_text}{RESET}\0338")
+    sys.stdout.flush()
+
+
+def setup_status_bar(text: str) -> None:
+    global _status_text
+    _status_text = text
+    rows = _term_rows()
+    sys.stdout.write(f"\033[1;{rows - 1}r")  # scroll region excludes last row
+    sys.stdout.flush()
+    draw_status_bar()
+
+
+def teardown_status_bar() -> None:
+    global _status_text
+    rows = _term_rows()
+    sys.stdout.write(f"\0337\033[{rows};1H\033[K\0338\033[r")  # clear bar, restore scroll region
+    sys.stdout.flush()
+    _status_text = ""
+
 
 def waiting_dots_thread(stop: threading.Event):
     """Show a simple ... animation in a thread until stop is set."""
@@ -200,6 +234,7 @@ def waiting_dots_thread(stop: threading.Event):
         i += 1
     sys.stdout.write("\r\033[K\033[?25h")  # clear line, restore cursor
     sys.stdout.flush()
+    draw_status_bar()
 
 
 async def stream_response(client: ClaudeSDKClient, output: list | None = None) -> tuple[str | None, float | None]:

@@ -38,7 +38,7 @@ from claude_agent_sdk import (
 )
 
 from . import input as cc_input
-from .render import DIM, RESET, bubble_row_count, dots_paused, format_tool_use, print_recent_messages, print_user_bubble, stream_response
+from .render import DIM, RESET, bubble_row_count, dots_paused, draw_status_bar, format_tool_use, print_recent_messages, print_user_bubble, setup_status_bar, stream_response, teardown_status_bar
 from .session import load_last_session, save_session_id
 
 async def _permission_callback(tool_name: str, tool_input: dict, context) -> object:
@@ -218,8 +218,8 @@ def _load_settings() -> dict:
     return merged
 
 
-def _print_settings_summary(settings: dict, options: ClaudeAgentOptions):
-    """Print a dim one-line summary of the active settings."""
+def _settings_summary(settings: dict, options: ClaudeAgentOptions) -> str:
+    """Build a one-line summary of the active settings."""
     parts = []
 
     model = options.model or settings.get("model") or "default"
@@ -236,7 +236,7 @@ def _print_settings_summary(settings: dict, options: ClaudeAgentOptions):
     if settings.get("alwaysThinkingEnabled"):
         parts.append("thinking")
 
-    print(f"{DIM}  {' · '.join(parts)}{RESET}")
+    return " · ".join(parts)
 
 
 def main():
@@ -255,11 +255,11 @@ def main():
     cc_input.setup()
     settings = _load_settings()
     options, resume = build_options(args)
-    _print_settings_summary(settings, options)
 
     if resume:
         print_recent_messages(resume)
 
+    setup_status_bar(_settings_summary(settings, options))
     try:
         if args.prompt:
             asyncio.run(run(args.prompt, options))
@@ -273,7 +273,9 @@ def main():
             asyncio.run(interactive(options))
     except KeyboardInterrupt:
         print()
-        sys.exit(130)
+    finally:
+        teardown_status_bar()
+        sys.exit(0)
 
 
 if __name__ == "__main__":

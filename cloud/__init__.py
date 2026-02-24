@@ -256,10 +256,10 @@ def main():
     settings = _load_settings()
     options, resume = build_options(args)
 
+    setup_status_bar(_settings_summary(settings, options))
+
     if resume:
         print_recent_messages(resume)
-
-    setup_status_bar(_settings_summary(settings, options))
     try:
         if args.prompt:
             asyncio.run(run(args.prompt, options))

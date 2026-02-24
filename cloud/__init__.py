@@ -22,6 +22,7 @@ most recent conversation.
 import argparse
 import asyncio
 import dataclasses
+import json
 import os
 import re
 import sys
@@ -201,6 +202,43 @@ def build_options(args) -> tuple[ClaudeAgentOptions, str | None]:
     return ClaudeAgentOptions(**kwargs), resume
 
 
+def _load_settings() -> dict:
+    """Merge user + project settings the same way Claude Code does."""
+    merged: dict = {}
+    for path in [
+        Path.home() / ".claude" / "settings.json",
+        Path.cwd() / ".claude" / "settings.json",
+        Path.cwd() / ".claude" / "settings.local.json",
+    ]:
+        if path.exists():
+            try:
+                merged.update(json.loads(path.read_text()))
+            except Exception:
+                pass
+    return merged
+
+
+def _print_settings_summary(settings: dict, options: ClaudeAgentOptions):
+    """Print a dim one-line summary of the active settings."""
+    parts = []
+
+    model = options.model or settings.get("model") or "default"
+    parts.append(model)
+
+    mcp = settings.get("mcpServers", {})
+    if mcp:
+        parts.append(f"{len(mcp)} MCP server{'s' if len(mcp) != 1 else ''}")
+
+    plugins = [k.split("@")[0] for k, v in settings.get("enabledPlugins", {}).items() if v]
+    if plugins:
+        parts.append(", ".join(plugins))
+
+    if settings.get("alwaysThinkingEnabled"):
+        parts.append("thinking")
+
+    print(f"{DIM}  {' · '.join(parts)}{RESET}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Minimal Claude Code wrapper",
@@ -215,7 +253,9 @@ def main():
     args = parser.parse_args()
 
     cc_input.setup()
+    settings = _load_settings()
     options, resume = build_options(args)
+    _print_settings_summary(settings, options)
 
     if resume:
         print_recent_messages(resume)

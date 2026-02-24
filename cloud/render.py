@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import re
 import sys
@@ -18,7 +20,6 @@ from .session import load_session_messages
 DIM = "\033[2m"
 RED = "\033[31m"
 GREEN = "\033[32m"
-BLUE = "\033[34;1m"
 RESET = "\033[0m"
 
 LIGHT_BLUE = "\033[94m"
@@ -157,8 +158,6 @@ def render_content_blocks(content: list[dict]):
 
 def print_recent_messages(session_id: str, max_lines: int = 200):
     """Print up to max_lines of recent session history."""
-    import io, contextlib
-
     exchanges = load_session_messages(session_id)
     if not exchanges:
         return
@@ -179,7 +178,7 @@ def print_recent_messages(session_id: str, max_lines: int = 200):
     if len(lines) > max_lines:
         lines = lines[-max_lines:]
     sys.stdout.write("\n".join(lines))
-    if lines and not lines[-1] == "":
+    if lines and lines[-1] != "":
         sys.stdout.write("\n")
     print(f"{DIM}{'─' * 40}{RESET}")
 

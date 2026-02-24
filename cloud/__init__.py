@@ -38,7 +38,7 @@ from claude_agent_sdk import (
 )
 
 from . import input as cc_input
-from .render import DIM, RESET, bubble_row_count, dots_paused, draw_status_bar, format_tool_use, print_recent_messages, print_user_bubble, setup_status_bar, stream_response, teardown_status_bar
+from .render import DIM, RESET, bubble_row_count, dots_paused, format_tool_use, print_recent_messages, print_user_bubble, setup_status_bar, stream_response, teardown_status_bar
 from .session import load_last_session, save_session_id
 
 async def _permission_callback(tool_name: str, tool_input: dict, context) -> object:
@@ -252,7 +252,6 @@ def main():
     parser.add_argument("--dangerously-skip-permissions", action="store_true", help="Bypass all permission checks")
     args = parser.parse_args()
 
-    cc_input.setup()
     settings = _load_settings()
     options, resume = build_options(args)
 

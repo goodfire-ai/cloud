@@ -27,9 +27,7 @@ DISABLE_KITTY = "\033[<u"
 
 _original_termios: list | None = None
 
-
-def setup() -> None:
-    pass
+_WORD_SEP = (" ", "\n", "\t")
 
 
 def _enter_raw():
@@ -195,10 +193,10 @@ class LineEditor:
     def delete_word_back(self):
         if self.cursor == 0:
             return
-        while self.cursor > 0 and self.buf[self.cursor - 1] in (" ", "\n"):
+        while self.cursor > 0 and self.buf[self.cursor - 1] in _WORD_SEP:
             self.cursor -= 1
             del self.buf[self.cursor]
-        while self.cursor > 0 and self.buf[self.cursor - 1] not in (" ", "\n"):
+        while self.cursor > 0 and self.buf[self.cursor - 1] not in _WORD_SEP:
             self.cursor -= 1
             del self.buf[self.cursor]
 
@@ -211,18 +209,16 @@ class LineEditor:
             self.cursor += 1
 
     def move_word_left(self):
-        """Move back past whitespace then past a word (readline backward-word)."""
-        while self.cursor > 0 and self.buf[self.cursor - 1] in (" ", "\n", "\t"):
+        while self.cursor > 0 and self.buf[self.cursor - 1] in _WORD_SEP:
             self.cursor -= 1
-        while self.cursor > 0 and self.buf[self.cursor - 1] not in (" ", "\n", "\t"):
+        while self.cursor > 0 and self.buf[self.cursor - 1] not in _WORD_SEP:
             self.cursor -= 1
 
     def move_word_right(self):
-        """Move forward past whitespace then past a word (readline forward-word)."""
         n = len(self.buf)
-        while self.cursor < n and self.buf[self.cursor] in (" ", "\n", "\t"):
+        while self.cursor < n and self.buf[self.cursor] in _WORD_SEP:
             self.cursor += 1
-        while self.cursor < n and self.buf[self.cursor] not in (" ", "\n", "\t"):
+        while self.cursor < n and self.buf[self.cursor] not in _WORD_SEP:
             self.cursor += 1
 
     def move_line_start(self):

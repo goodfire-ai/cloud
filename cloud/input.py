@@ -14,6 +14,8 @@ import termios
 import time
 import tty
 
+from .render import draw_status_bar
+
 _ANSI_RE = re.compile(r"\033\[[^m]*m")
 
 DIM = "\033[2m"
@@ -290,6 +292,7 @@ def _render(editor: LineEditor, prompt: str, prev_rows: int = 1) -> int:
     sys.stdout.write(f"\r\033[{col}C" if col > 0 else "\r")
 
     sys.stdout.flush()
+    draw_status_bar()
     return total_rows
 
 

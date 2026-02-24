@@ -207,16 +207,13 @@ def draw_status_bar() -> None:
 def setup_status_bar(text: str) -> None:
     global _status_text
     _status_text = text
-    rows = _term_rows()
-    sys.stdout.write(f"\033[1;{rows - 1}r")  # scroll region excludes last row
-    sys.stdout.flush()
     draw_status_bar()
 
 
 def teardown_status_bar() -> None:
     global _status_text
     rows = _term_rows()
-    sys.stdout.write(f"\0337\033[{rows};1H\033[K\0338\033[r")  # clear bar, restore scroll region
+    sys.stdout.write(f"\0337\033[{rows};1H\033[K\0338")
     sys.stdout.flush()
     _status_text = ""
 
